@@ -1,0 +1,12 @@
+# Copy to .envrc and fill in your values
+# If using direnv, run: direnv allow
+
+# Release signing (required for `just publish`)
+export CODESIGN_IDENTITY=""  # e.g. "Developer ID Application: Your Name (TEAMID)"
+export TAP_DIR=""            # path to your local homebrew-tap checkout
+
+# Optional: preserves Accessibility grants across `just dev` rebuilds
+export COPYCAT_SIGNING_CERT="" # e.g. "Apple Development: Your Name (TEAMID)"
+
+# Optional: bundle ID override (default: com.copycat.macos.app — change if forking)
+export COPYCAT_BUNDLE_ID=""
