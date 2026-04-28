@@ -1,0 +1,21 @@
+# Swift / SPM
+.build/
+build/
+Package.resolved
+.swiftpm/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Local env / signing creds
+.env.local
+.envrc
+profiles/embedded.provisionprofile
+
+# Release artifacts
+*.zip
+*.dmg
