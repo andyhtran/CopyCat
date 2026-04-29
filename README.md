@@ -22,6 +22,10 @@
   <img src=".github/screenshot.png" alt="CopyCat screenshot" width="520">
 </p>
 
+<p align="center">
+  <img src=".github/screenshot2.png" alt="Claude Code reading a pasted screenshot path" width="520">
+</p>
+
 ## Getting Started
 
 1. [**Download CopyCat**](https://github.com/andyhtran/CopyCat/releases/latest/download/CopyCat.dmg)
