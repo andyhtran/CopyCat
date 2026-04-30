@@ -22,6 +22,7 @@ enum SettingsDefaults {
     static let enableLocalPaste = true
     static let enableBroadcast  = false
     static let launchAtLogin    = false
+    static let showMenuBarIcon  = true
 
     // Common terminal bundle IDs. Users can add/remove via Settings.
     static let targetBundleIDs: Set<String> = [
@@ -60,6 +61,7 @@ enum Settings {
         static let enableLocalPaste  = "enableLocalPaste"
         static let enableBroadcast   = "enableBroadcast"
         static let launchAtLogin     = "launchAtLogin"
+        static let showMenuBarIcon   = "showMenuBarIcon"
     }
 
     static func registerDefaults() {
@@ -67,6 +69,7 @@ enum Settings {
             Key.enableLocalPaste:  SettingsDefaults.enableLocalPaste,
             Key.enableBroadcast:   SettingsDefaults.enableBroadcast,
             Key.launchAtLogin:     SettingsDefaults.launchAtLogin,
+            Key.showMenuBarIcon:   SettingsDefaults.showMenuBarIcon,
             Key.broadcastHotkey:   SettingsDefaults.broadcastHotkey.rawValue,
             Key.cacheKeepCount:    SettingsDefaults.cacheKeepCount,
         ])

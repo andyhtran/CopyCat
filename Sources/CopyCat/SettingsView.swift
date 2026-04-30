@@ -21,22 +21,17 @@ struct SettingsView: View {
     @ObservedObject private var nav = SettingsNavigation.shared
 
     var body: some View {
-        TabView(selection: $nav.selectedTab) {
-            GeneralSettingsView()
-                .tag(SettingsTab.general)
-                .tabItem { Label("General", systemImage: "gearshape") }
-            AppsSettingsView()
-                .tag(SettingsTab.apps)
-                .tabItem { Label("Apps", systemImage: "app.badge") }
-            HostsSettingsView()
-                .tag(SettingsTab.broadcast)
-                .tabItem { Label("SSH hosts", systemImage: "antenna.radiowaves.left.and.right") }
+        // Tab switching is driven by the host window's NSToolbar
+        // (SettingsWindowController), which writes nav.selectedTab. Using a
+        // switch here instead of TabView avoids SwiftUI rendering its own
+        // segmented tab bar on top of the toolbar.
+        Group {
+            switch nav.selectedTab {
+            case .general:   GeneralSettingsView()
+            case .apps:      AppsSettingsView()
+            case .broadcast: HostsSettingsView()
+            }
         }
-        // Fixed size, not minWidth/minHeight: macOS persists the Settings
-        // window frame in UserDefaults under "NSWindow Frame
-        // com_apple_SwiftUI_Settings_window", and the persisted size always
-        // wins over a minimum constraint. Use frame(width:height:) to force
-        // the size we actually want.
         .frame(width: 460, height: 500)
         .windowFocusSink()
     }
@@ -46,6 +41,12 @@ struct SettingsView: View {
 
 private struct GeneralSettingsView: View {
     @ObservedObject private var store = SettingsStore.shared
+
+    // Bound directly to the same UserDefaults key as the App scene's
+    // @AppStorage so writes from this toggle propagate to MenuBarExtra
+    // immediately. Routing through SettingsStore (raw UserDefaults.set) does
+    // not reliably notify @AppStorage observers.
+    @AppStorage("showMenuBarIcon") private var showMenuBarIcon: Bool = true
 
     var body: some View {
         Form {
@@ -64,6 +65,10 @@ private struct GeneralSettingsView: View {
                     }
                 }
                 .disabled(!store.enableBroadcast)
+            }
+
+            Section("Appearance") {
+                Toggle("Show menu bar icon", isOn: $showMenuBarIcon)
             }
 
             Section("Cache") {

@@ -5,6 +5,12 @@ import SwiftUI
 struct CopyCatApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    // Bound directly to UserDefaults rather than via SettingsStore. Observing
+    // the whole store at App scope re-renders the MenuBarExtra subtree on
+    // every publish, and StatusHeader.body shells out to `tailscale status`
+    // synchronously — that combination produces a tight transaction loop.
+    @AppStorage("showMenuBarIcon") private var showMenuBarIcon: Bool = true
+
     // Resolve once at startup. SwiftUI's MenuBarExtra(_:image:) form expects
     // an asset-catalog name, which we don't have — feeding NSImage directly
     // through the custom-label form sidesteps that lookup.
@@ -23,21 +29,21 @@ struct CopyCatApp: App {
     }()
 
     var body: some Scene {
-        MenuBarExtra {
+        // Settings is hosted in an AppDelegate-owned NSWindowController, not
+        // a SwiftUI Settings scene. showSettingsWindow: dispatch is unreliable
+        // for LSUIElement apps — when the menu bar icon is hidden there's no
+        // key window in the responder chain, so applicationShouldHandleReopen
+        // can't surface it.
+        MenuBarExtra(isInserted: $showMenuBarIcon) {
             CopyCatMenu()
         } label: {
             Image(nsImage: menuBarIcon)
                 .accessibilityLabel("CopyCat")
         }
-
-        SwiftUI.Settings {
-            SettingsView()
-        }
     }
 }
 
 private struct CopyCatMenu: View {
-    @Environment(\.openSettings) private var openSettings
     @ObservedObject private var store = SettingsStore.shared
 
     var body: some View {
@@ -76,8 +82,7 @@ private struct CopyCatMenu: View {
         Divider()
 
         Button("Settings…") {
-            NSApp.activate(ignoringOtherApps: true)
-            openSettings()
+            AppDelegate.shared?.openSettings()
         }
         .keyboardShortcut(",")
 
@@ -138,7 +143,6 @@ private struct StatusHeader: View {
 
 private struct BroadcastHostsMenu: View {
     @ObservedObject private var store = SettingsStore.shared
-    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         Menu("SSH hosts") {
@@ -154,8 +158,7 @@ private struct BroadcastHostsMenu: View {
             Divider()
             Button("Configure…") {
                 SettingsNavigation.shared.selectedTab = .broadcast
-                NSApp.activate(ignoringOtherApps: true)
-                openSettings()
+                AppDelegate.shared?.openSettings()
             }
         }
     }
@@ -196,6 +199,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static var shared: AppDelegate?
 
     var pasteHandler: PasteHandler?
+    private var settingsWindowController: SettingsWindowController?
+
+    func openSettings() {
+        if settingsWindowController == nil {
+            settingsWindowController = SettingsWindowController()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindowController?.showWindow(nil)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
@@ -218,5 +230,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         Log.app.info("CopyCat terminating")
         pasteHandler?.stop()
+    }
+
+    // Re-launching from Spotlight/Finder is the documented escape hatch when
+    // the menu bar icon is hidden. Always open Settings — it's the only
+    // visible surface we can offer, and matches Rectangle's pattern.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        openSettings()
+        return true
     }
 }
