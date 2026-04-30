@@ -46,6 +46,12 @@ brew tap andyhtran/tap
 brew install --cask copycat
 ```
 
+To upgrade to the latest release:
+
+```bash
+brew update && brew install --cask copycat
+```
+
 ### Build from source
 
 Requires macOS 14+ (Sonoma) and Swift 6+.
