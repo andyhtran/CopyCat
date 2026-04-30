@@ -24,7 +24,12 @@ enum TailscaleDiscovery {
     // hosts the user can pick from.
     static func allPeers() -> [TailscalePeer] {
         guard let bin = executablePath else { return [] }
-        guard let result = runShell(bin, args: ["status", "--json"]) else {
+        // TAILSCALE_BE_CLI=1: when the bundled Tailscale binary is invoked from
+        // a notarized app's subprocess (no TTY), it relaunches the GUI instead
+        // of running as CLI. The env var forces CLI mode. See
+        // tailscale/tailscale#16063 and #7140.
+        let env = ["TAILSCALE_BE_CLI": "1", "PATH": "/usr/bin:/bin"]
+        guard let result = runShell(bin, args: ["status", "--json"], env: env) else {
             Log.app.error("tailscale status: spawn failed for \(bin)")
             return []
         }
@@ -36,7 +41,9 @@ enum TailscaleDiscovery {
             Log.app.info("tailscale status exit=\(result.exitCode): \(stderr)")
             return []
         }
-        return parseTailscalePeers(json: result.stdout)
+        let peers = parseTailscalePeers(json: result.stdout)
+        Log.app.info("tailscale status ok: \(peers.count) peers via \(bin)")
+        return peers
     }
 
     static func onlineHostnames() -> [String] {
