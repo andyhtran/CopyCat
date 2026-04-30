@@ -196,10 +196,11 @@ struct ShellResult: Sendable {
 /// Runs a process with stdin detached, capturing stdout and stderr separately
 /// so callers can distinguish "no output" from "failed silently". Returns
 /// `nil` only when the process couldn't be spawned at all (bad path, etc).
-func runShell(_ exec: String, args: [String]) -> ShellResult? {
+func runShell(_ exec: String, args: [String], env: [String: String]? = nil) -> ShellResult? {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: exec)
     p.arguments = args
+    if let env { p.environment = env }
     let outPipe = Pipe()
     let errPipe = Pipe()
     p.standardOutput = outPipe
