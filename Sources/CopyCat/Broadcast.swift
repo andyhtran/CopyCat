@@ -63,8 +63,9 @@ enum Broadcast {
             )
         }
 
-        // Remote home dir is unknown, so always tilde-prefix.
-        let typed = "~/\(remoteCacheRel)/\(outName)"
+        // Remote home dir is unknown, so always tilde-prefix. Trailing space
+        // matches the local-paste path so the user can keep typing.
+        let typed = "~/\(remoteCacheRel)/\(outName) "
         DispatchQueue.main.async {
             Typer.type(typed)
         }
