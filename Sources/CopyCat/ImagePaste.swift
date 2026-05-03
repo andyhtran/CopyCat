@@ -25,7 +25,11 @@ enum ImagePaste {
         // IDE, …) — unlike `~/`, which only expands inside a shell. The
         // user-visible cosmetic cost is /Users/you/… instead of ~/…, which
         // is fine: this terminal already knows who you are.
-        let typed = outPath.path
+        // Trailing space so the user can keep typing the next argument without
+        // hitting space themselves. The typed path has no spaces, so the only
+        // way this corrupts a command is pasting inside quotes — uncommon for
+        // this workflow.
+        let typed = outPath.path + " "
         DispatchQueue.main.async {
             Typer.type(typed)
         }
