@@ -93,6 +93,10 @@ SSH paste has to use `~/` because the remote home dir is unknown. Your remote us
 
 Each screenshot is sent to every enabled host you've configured. With one host it's just SSH paste; with multiple it broadcasts (fans out) to all of them. Toggle individual hosts on/off in the menu bar to control which ones receive a given screenshot.
 
+**Why does CopyCat use `~/.cache/copycat/` instead of `~/Library/Caches/`?**
+
+So the same path resolves on both your Mac and remote Linux/NixOS hosts. SSH paste types `~/.cache/copycat/screenshot.jpg` into the terminal — that path needs to work on both sides without platform detection or separate configuration. The cache directory is configurable in Settings if you prefer a different location.
+
 **What's the simplest setup?**
 
 Leave SSH off. CopyCat then only intercepts ⌘V locally — no SSH, no remote hosts, no Tailscale needed. Turn SSH on when you want to paste into a remote shell.

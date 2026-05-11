@@ -38,6 +38,10 @@ enum SettingsDefaults {
     static let broadcastHotkey: BroadcastHotkey = .cmdV
     static let cacheKeepCount = 50
 
+    // ~/.cache/copycat/ on all platforms, not ~/Library/Caches/ on macOS.
+    // SSH paste types this path into the terminal and it must resolve on
+    // both the local Mac and remote Linux hosts. A single cross-platform
+    // path keeps that invariant without platform detection or split config.
     static var cacheDir: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".cache/copycat", isDirectory: true)
