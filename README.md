@@ -42,8 +42,7 @@ To paste into remote terminals over SSH, click the menu bar icon â†’ **Settingsâ
 ### Homebrew
 
 ```bash
-brew tap andyhtran/tap
-brew install --cask copycat
+brew install --cask andyhtran/tap/copycat
 ```
 
 To upgrade to the latest release:
