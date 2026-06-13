@@ -7,8 +7,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/macOS-14.0%2B-blue" alt="macOS 14.0+">
   <img src="https://img.shields.io/badge/Swift-6.0%2B-orange" alt="Swift 6.0+">
-  <img src="https://img.shields.io/github/license/andyhtran/CopyCat" alt="License MIT">
-  <img src="https://img.shields.io/github/v/release/andyhtran/CopyCat?display_name=tag&sort=semver&cacheSeconds=120" alt="GitHub release">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="License MIT">
+  <img src="https://img.shields.io/badge/release-v0.3.2-blue" alt="GitHub release">
   <img src="https://img.shields.io/badge/Compatible-Claudex-8A5CF6?style=flat-square" alt="Claudex">
 </p>
 

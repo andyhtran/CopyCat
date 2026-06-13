@@ -55,6 +55,15 @@ github-release: sign-and-notarize create-dmg
     TAG="v${MARKETING_VERSION}"
     ZIP="CopyCat-${MARKETING_VERSION}.zip"
     DMG="CopyCat.dmg"
+    # Keep the static release badge in sync. It's static (not shields.io's
+    # /github/v/release endpoint) so it can't render shields.io's transient
+    # "Unable to select next GitHub token from pool" rate-limit error.
+    sed -i '' "s|release-v[0-9][0-9.]*-blue|release-v${MARKETING_VERSION}-blue|" README.md
+    if ! git diff --quiet README.md; then
+        git add README.md
+        git commit -m "Update release badge to ${TAG}"
+        git push origin HEAD
+    fi
     git tag -f "$TAG"
     git push -f origin "$TAG"
     gh release create "$TAG" "$ZIP" "$DMG" \
