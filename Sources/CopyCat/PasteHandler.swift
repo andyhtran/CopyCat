@@ -8,13 +8,23 @@ final class PasteHandler: @unchecked Sendable {
     private var tap: CFMachPort?
     private var runloopSource: CFRunLoopSource?
     private var watchdog: Timer?
+    private var lastEventTime: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
 
     func start() {
         installTap()
         startWatchdog()
+
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Log.tap.info("wake detected — reinstalling tap")
+            self?.teardownTap()
+            self?.installTap()
+        }
     }
 
     func stop() {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         watchdog?.invalidate()
         watchdog = nil
         teardownTap()
@@ -81,6 +91,8 @@ final class PasteHandler: @unchecked Sendable {
     }
 
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        lastEventTime = CFAbsoluteTimeGetCurrent()
+
         // OS killed the tap — re-enable in place. The event itself is
         // synthetic and gets discarded.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -140,6 +152,13 @@ final class PasteHandler: @unchecked Sendable {
         }
     }
 
+    // Stale-tap detection: macOS can silently stop delivering events to
+    // a CGEvent tap even though tapIsEnabled still returns true. The Mach
+    // port stays valid but the kernel no longer routes HID events through
+    // it. A keyboard generates continuous keyDown events from normal
+    // typing, so a 5-minute silence is a strong signal the tap is dead.
+    private static let staleTapInterval: CFTimeInterval = 90
+
     private func checkAndRevive() {
         guard let tap else {
             Log.watchdog.info("tap is nil; reinstalling")
@@ -147,6 +166,15 @@ final class PasteHandler: @unchecked Sendable {
             return
         }
         let enabled = CGEvent.tapIsEnabled(tap: tap)
+        let silent = CFAbsoluteTimeGetCurrent() - lastEventTime
+
+        if enabled && silent > Self.staleTapInterval {
+            Log.watchdog.info("tap appears stale (enabled=true but silent \(Int(silent))s); full reinstall")
+            teardownTap()
+            installTap()
+            return
+        }
+
         if enabled {
             Log.watchdog.info("tap.enabled=true")
             return

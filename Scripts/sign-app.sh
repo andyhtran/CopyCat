@@ -31,6 +31,16 @@ WARN
   CERT="-"
 fi
 
+ENTITLEMENTS="${APP%/*}/CopyCat.entitlements"
+if [[ ! -f "$ENTITLEMENTS" ]]; then
+  ENTITLEMENTS="$(cd "$(dirname "$0")/.." && pwd)/Resources/CopyCat.entitlements"
+fi
+
 echo "Signing $APP"
 echo "    cert: $CERT"
-codesign --force --deep --sign "$CERT" "$APP"
+if [[ -f "$ENTITLEMENTS" ]]; then
+  echo "    entitlements: $ENTITLEMENTS"
+  codesign --force --deep --sign "$CERT" --entitlements "$ENTITLEMENTS" "$APP"
+else
+  codesign --force --deep --sign "$CERT" "$APP"
+fi
