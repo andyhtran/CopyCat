@@ -8,11 +8,16 @@ final class PasteHandler: @unchecked Sendable {
     private var tap: CFMachPort?
     private var runloopSource: CFRunLoopSource?
     private var watchdog: Timer?
+    private var uiTimer: Timer?
     private var lastEventTime: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
+    // Dedup flag so the blocked→restored transition is logged/notified once
+    // each, not every 30s tick. Menu state is pushed separately via publishStatus.
+    private var secureInputWarned = false
 
     func start() {
         installTap()
         startWatchdog()
+        startUIRefresh()
 
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
@@ -27,6 +32,8 @@ final class PasteHandler: @unchecked Sendable {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         watchdog?.invalidate()
         watchdog = nil
+        uiTimer?.invalidate()
+        uiTimer = nil
         teardownTap()
     }
 
@@ -34,6 +41,30 @@ final class PasteHandler: @unchecked Sendable {
     var isTapEnabled: Bool {
         guard let tap else { return false }
         return CGEvent.tapIsEnabled(tap: tap)
+    }
+
+    // Push current tap + Secure Input state into the observable menu model.
+    // The menu can't read these live (the reads aren't observable, so SwiftUI
+    // froze them at launch — the old "Tap off" bug), so we publish on every
+    // state change and once per watchdog tick. Callers are always on the main
+    // thread (start / wake observer / main-runloop timer), so assumeIsolated is
+    // safe and avoids an async hop. Assigns only on change to skip churn.
+    private func publishStatus() {
+        let enabled = isTapEnabled
+        // Gate the menu warning on the same allowlist as the alert, so the two
+        // surfaces stay consistent: no "blocked by <browser>" while you're just
+        // on a login page.
+        let blocker: String?
+        if case .blocked(let owner) = SecureInput.status(), frontmostIsTarget() {
+            blocker = owner?.description ?? "unknown source"
+        } else {
+            blocker = nil
+        }
+        MainActor.assumeIsolated {
+            let model = StatusModel.shared
+            if model.tapEnabled != enabled { model.tapEnabled = enabled }
+            if model.secureInputBlocker != blocker { model.secureInputBlocker = blocker }
+        }
     }
 
     private func teardownTap() {
@@ -46,9 +77,13 @@ final class PasteHandler: @unchecked Sendable {
         }
         tap = nil
         runloopSource = nil
+        publishStatus()
     }
 
     private func installTap() {
+        // Publish on every exit path so a failed install (no Accessibility,
+        // nil tap) shows "Tap off" rather than a stale value.
+        defer { publishStatus() }
         guard ensureAccessibility(prompt: true) else {
             Log.tap.error("Accessibility not granted — tap NOT installed. Grant in System Settings → Privacy & Security → Accessibility, then relaunch.")
             return
@@ -90,6 +125,20 @@ final class PasteHandler: @unchecked Sendable {
         Log.tap.info("installed (enabled=\(CGEvent.tapIsEnabled(tap: tap)))")
     }
 
+    private func frontmostBundleID() -> String? {
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+    }
+
+    // The same allowlist gate CopyCat uses to decide whether to act on ⌘V.
+    // The watchdog reuses it so Secure Input alerts fire only when the user is
+    // in an app CopyCat handles: a focused password field in some other app
+    // (a browser, say) blocks the tap session-wide too, but isn't the user's
+    // concern at that moment, so alerting would just be noise.
+    private func frontmostIsTarget() -> Bool {
+        guard let id = frontmostBundleID() else { return false }
+        return Settings.targetBundleIDs.contains(id)
+    }
+
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         lastEventTime = CFAbsoluteTimeGetCurrent()
 
@@ -120,7 +169,7 @@ final class PasteHandler: @unchecked Sendable {
         // (more-modifiers) chord is the broadcast one in the default config.
         let category = isBroadcast ? Log.cmdOptV : Log.cmdV
 
-        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let frontmost = frontmostBundleID()
         guard let frontmost, Settings.targetBundleIDs.contains(frontmost) else {
             category.info("bail — frontmost is \(frontmost ?? "nil")")
             return Unmanaged.passUnretained(event)
@@ -152,14 +201,31 @@ final class PasteHandler: @unchecked Sendable {
         }
     }
 
-    // Stale-tap detection: macOS can silently stop delivering events to
-    // a CGEvent tap even though tapIsEnabled still returns true. The Mach
-    // port stays valid but the kernel no longer routes HID events through
-    // it. A keyboard generates continuous keyDown events from normal
-    // typing, so a 5-minute silence is a strong signal the tap is dead.
+    // The 30s watchdog is too coarse for the menu: the Secure Input warning
+    // would lag up to 30s appearing and clearing. A short poll keeps the menu
+    // within a couple seconds of reality. publishStatus only writes the model
+    // on change, so steady state is just a cheap read with no re-render.
+    private static let uiRefreshInterval: TimeInterval = 2
+
+    private func startUIRefresh() {
+        uiTimer = Timer.scheduledTimer(withTimeInterval: Self.uiRefreshInterval, repeats: true) { [weak self] _ in
+            self?.publishStatus()
+        }
+    }
+
+    // How long the tap must be silent before we look for Secure Input. Silence
+    // is NOT proof of a dead tap — it's identical to the user simply not typing —
+    // so it only gates the Secure Input check (and keeps that from false-alarming
+    // on brief password prompts). The "silent death" that originally motivated a
+    // silence-based reinstall traced back to Secure Input, which we now detect
+    // directly; real tap death surfaces via tapIsEnabled and the OS tapDisabled
+    // events instead.
     private static let staleTapInterval: CFTimeInterval = 90
 
     private func checkAndRevive() {
+        // Refresh the menu model once per tick regardless of which branch we
+        // take — this is what keeps Secure Input status current in the menu.
+        defer { publishStatus() }
         guard let tap else {
             Log.watchdog.info("tap is nil; reinstalling")
             installTap()
@@ -168,12 +234,22 @@ final class PasteHandler: @unchecked Sendable {
         let enabled = CGEvent.tapIsEnabled(tap: tap)
         let silent = CFAbsoluteTimeGetCurrent() - lastEventTime
 
-        if enabled && silent > Self.staleTapInterval {
-            Log.watchdog.info("tap appears stale (enabled=true but silent \(Int(silent))s); full reinstall")
-            teardownTap()
-            installTap()
+        // Long silence with the tap still "enabled" has one confirmed cause:
+        // Secure Input swallowing key events. Idle looks identical, so we surface
+        // Secure Input but deliberately do NOT reinstall on silence — that just
+        // churned a healthy, merely-idle tap every 30s. A reinstall can't defeat
+        // Secure Input anyway. Only alert when the user is in an app CopyCat
+        // handles; otherwise stay quiet.
+        if enabled && silent > Self.staleTapInterval, case .blocked(let owner) = SecureInput.status() {
+            if frontmostIsTarget() {
+                logSecureInputBlocked(owner)
+            } else {
+                Log.watchdog.info("Secure Input active (\(owner?.description ?? "unknown source")); frontmost not a target app — not alerting")
+            }
             return
         }
+
+        noteSecureInputCleared()
 
         if enabled {
             Log.watchdog.info("tap.enabled=true")
@@ -186,6 +262,36 @@ final class PasteHandler: @unchecked Sendable {
             teardownTap()
             installTap()
         }
+    }
+
+    // Log the blocked edge once (prominent, actionable), then a quiet per-tick
+    // line so a `tail -f` keeps showing the live cause. Remediation differs by
+    // owner: a live app can be quit/refocused, but an orphaned lock survives
+    // that and needs a WindowServer reset.
+    private func logSecureInputBlocked(_ owner: SecureInput.Owner?) {
+        let restore = HotkeyBinding.localPaste.displayString
+        guard !secureInputWarned else {
+            Log.watchdog.info("still blocked by Secure Input (\(owner?.description ?? "unknown source"))")
+            return
+        }
+        secureInputWarned = true
+        if let owner, owner.isOrphaned {
+            Log.tap.error("blocked by an orphaned Secure Input lock — its owner (pid \(owner.pid)) exited without releasing it; \(restore) stays dead session-wide until a WindowServer reset (log out and back in) clears it")
+        } else if let owner {
+            Log.tap.error("blocked by Secure Input held by \(owner.description) — key events are suppressed for every app session-wide; quit/refocus \(owner.appName ?? "that process") or finish its password prompt to restore \(restore)")
+        } else {
+            Log.tap.error("blocked by Secure Input (owner unknown) — key events are suppressed session-wide; if it persists, log out and back in to restore \(restore)")
+        }
+        Notifier.secureInputBlocked(owner)
+    }
+
+    // Log the blocked→restored edge exactly once so a `tail -f` shows a clear
+    // recovery line instead of events silently resuming.
+    private func noteSecureInputCleared() {
+        guard secureInputWarned else { return }
+        secureInputWarned = false
+        Log.tap.info("Secure Input cleared — \(HotkeyBinding.localPaste.displayString) interception restored")
+        Notifier.secureInputCleared()
     }
 
     private func ensureAccessibility(prompt: Bool) -> Bool {

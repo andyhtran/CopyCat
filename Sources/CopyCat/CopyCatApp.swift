@@ -97,13 +97,21 @@ private struct CopyCatMenu: View {
 
 private struct StatusHeader: View {
     @ObservedObject private var store = SettingsStore.shared
+    @ObservedObject private var status = StatusModel.shared
 
     var body: some View {
-        let tapEnabled = AppDelegate.shared?.pasteHandler?.isTapEnabled == true
-        let tapText = tapEnabled ? "Tap on" : "Tap off"
+        let tapText = status.tapEnabled ? "Tap on" : "Tap off"
 
-        Text("CopyCat — \(tapText)")
+        Text("\(status.appName) — \(tapText)")
             .font(.headline)
+
+        // Secure Input silently blocks the tap for the whole session, so a
+        // green "Tap on" alone would be misleading — call out the culprit.
+        if let blocker = status.secureInputBlocker {
+            Text("⚠ Blocked by Secure Input (\(blocker))")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
 
         if store.enableBroadcast {
             let hostText = broadcastStatusLine()
@@ -222,6 +230,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if stored != LaunchAtLogin.isEnabled {
             LaunchAtLogin.setEnabled(stored)
         }
+
+        Notifier.requestAuthorization()
 
         pasteHandler = PasteHandler()
         pasteHandler?.start()
