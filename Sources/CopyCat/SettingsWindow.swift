@@ -37,8 +37,11 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
         specs.first { $0.id == id }
     }
 
-    convenience init() {
-        let host = NSHostingController(rootView: SettingsView())
+    init(updaterController: UpdaterProviding?) {
+        let host = NSHostingController(
+            rootView: SettingsView()
+                .environment(\.updaterController, updaterController)
+        )
         let window = NSWindow(contentViewController: host)
         window.title = "CopyCat Settings"
         window.styleMask = [.titled, .closable]
@@ -46,7 +49,7 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
         window.setFrameAutosaveName("CopyCatSettingsWindow")
         window.center()
 
-        self.init(window: window)
+        super.init(window: window)
 
         let toolbar = NSToolbar(identifier: "CopyCatSettingsToolbar")
         toolbar.delegate = self
@@ -65,6 +68,9 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
             toolbar?.selectedItemIdentifier = newId
         }
     }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         Self.specs.map(\.id)

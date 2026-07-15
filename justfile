@@ -75,7 +75,31 @@ github-release: sign-and-notarize create-dmg
 update-tap:
     bash Scripts/update-tap.sh
 
-# Full release: sign + notarize, GitHub release, update tap.
+# Full release: sign + notarize, GitHub release, update tap, update appcast.
 [group('release')]
 publish: github-release update-tap
-    @echo "Release complete!"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source version.env
+    just generate-appcast "CopyCat-${MARKETING_VERSION}.zip"
+    git add appcast.xml
+    git commit -m "Update appcast for v${MARKETING_VERSION}"
+    git push origin main
+    echo "Release complete!"
+
+[group('sparkle')]
+generate-appcast zip:
+    ./Scripts/make-appcast.sh {{zip}}
+
+[group('sparkle')]
+generate-appcast-beta zip:
+    SPARKLE_CHANNEL=beta ./Scripts/make-appcast.sh {{zip}}
+
+[group('sparkle')]
+verify-appcast version="":
+    ./Scripts/verify-appcast.sh {{version}}
+
+# Local E2E test of the update flow: real Sparkle against a localhost appcast.
+[group('sparkle')]
+test-update:
+    bash Scripts/test-update-flow.sh

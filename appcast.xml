@@ -1,0 +1,8 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>CopyCat</title>
+        <link>https://raw.githubusercontent.com/andyhtran/CopyCat/main/appcast.xml</link>
+        <description>CopyCat updates</description>
+    </channel>
+</rss>

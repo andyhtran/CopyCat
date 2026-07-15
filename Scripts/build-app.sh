@@ -7,7 +7,9 @@ source "$ROOT/version.env"
 
 # YYMMDDHHMM timestamp — unique, monotonic, debuggable. Avoids manual bumping
 # and satisfies the App Store / notarization monotonic-build-number rule.
-BUILD_NUMBER="$(date +%y%m%d%H%M)"
+# Local Sparkle tests build old and new apps back-to-back, so they inject
+# distinct build numbers instead of waiting for the next minute.
+BUILD_NUMBER="${COPYCAT_BUILD_NUMBER:-$(date +%y%m%d%H%M)}"
 
 APP_NAME="CopyCat"
 CONFIG="${1:-debug}"
@@ -25,7 +27,8 @@ fi
 cd "$ROOT"
 swift build -c "$CONFIG" --product "$APP_NAME"
 
-BIN_PATH="$ROOT/.build/$CONFIG/$APP_NAME"
+BUILD_DIR="$ROOT/.build/$CONFIG"
+BIN_PATH="$BUILD_DIR/$APP_NAME"
 if [[ ! -x "$BIN_PATH" ]]; then
   BIN_PATH="$(find "$ROOT/.build" -type f -path "*/$CONFIG/$APP_NAME" -print -quit || true)"
 fi
@@ -37,9 +40,22 @@ fi
 if [[ "$CONFIG" == "release" ]]; then
   BUNDLE_ID="$RELEASE_BUNDLE_ID"
   DISPLAY_NAME="CopyCat"
+  FEED_URL="https://raw.githubusercontent.com/andyhtran/CopyCat/main/appcast.xml"
+  AUTO_CHECKS=true
 else
   BUNDLE_ID="${RELEASE_BUNDLE_ID}.dev"
   DISPLAY_NAME="CopyCat Dev"
+  FEED_URL=""
+  AUTO_CHECKS=false
+fi
+
+if [[ -n "${SPARKLE_FEED_URL_OVERRIDE:-}" ]]; then
+  if [[ "$CONFIG" != "debug" ]]; then
+    echo "SPARKLE_FEED_URL_OVERRIDE is only allowed for debug builds." >&2
+    exit 1
+  fi
+  # Local update-flow testing points the feed at a localhost appcast.
+  FEED_URL="$SPARKLE_FEED_URL_OVERRIDE"
 fi
 
 APP_BUNDLE="$ROOT/build/$APP_NAME.app"
@@ -57,6 +73,37 @@ for resource in AppIcon.icns MenuBarIcon.pdf; do
     cp "$ROOT/Resources/$resource" "$APP_BUNDLE/Contents/Resources/$resource"
   fi
 done
+
+# Embed Sparkle.framework.
+FRAMEWORKS_DIR="$APP_BUNDLE/Contents/Frameworks"
+if [[ -d "$BUILD_DIR/Sparkle.framework" ]]; then
+  mkdir -p "$FRAMEWORKS_DIR"
+  cp -R "$BUILD_DIR/Sparkle.framework" "$FRAMEWORKS_DIR/"
+  chmod -R a+rX "$FRAMEWORKS_DIR/Sparkle.framework"
+  install_name_tool -add_rpath "@executable_path/../Frameworks" \
+    "$APP_BUNDLE/Contents/MacOS/$APP_NAME" 2>/dev/null || true
+
+  SPARKLE_FW="$FRAMEWORKS_DIR/Sparkle.framework"
+
+  if [[ "$CONFIG" == "debug" ]]; then
+    CODESIGN_ARGS=(--force --sign "-")
+  else
+    CODESIGN_ARGS=(--force --timestamp --options runtime --sign "${CODESIGN_IDENTITY:--}")
+  fi
+
+  resign() { codesign "${CODESIGN_ARGS[@]}" "$1"; }
+
+  resign "$SPARKLE_FW/Versions/B/Sparkle"
+  resign "$SPARKLE_FW/Versions/B/Autoupdate"
+  resign "$SPARKLE_FW/Versions/B/Updater.app/Contents/MacOS/Updater"
+  resign "$SPARKLE_FW/Versions/B/Updater.app"
+  resign "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc/Contents/MacOS/Downloader"
+  resign "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc"
+  resign "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc/Contents/MacOS/Installer"
+  resign "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc"
+  resign "$SPARKLE_FW/Versions/B"
+  resign "$SPARKLE_FW"
+fi
 
 cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -93,6 +140,16 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
   <true/>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <key>SUFeedURL</key>
+  <string>${FEED_URL}</string>
+  <key>SUPublicEDKey</key>
+  <string>${SU_PUBLIC_ED_KEY}</string>
+  <key>SUEnableAutomaticChecks</key>
+  <${AUTO_CHECKS}/>
+  <key>SUAutomaticallyUpdate</key>
+  <false/>
+  <key>SUAllowsAutomaticUpdates</key>
+  <false/>
 </dict>
 </plist>
 PLIST
