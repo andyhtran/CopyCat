@@ -10,6 +10,7 @@ final class PasteHandler: @unchecked Sendable {
     private var watchdog: Timer?
     private var uiTimer: Timer?
     private var lastEventTime: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
+    private var starvedRebuilds = 0
     // Dedup flag so the blocked→restored transition is logged/notified once
     // each, not every 30s tick. Menu state is pushed separately via publishStatus.
     private var secureInputWarned = false
@@ -213,14 +214,35 @@ final class PasteHandler: @unchecked Sendable {
         }
     }
 
-    // How long the tap must be silent before we look for Secure Input. Silence
-    // is NOT proof of a dead tap — it's identical to the user simply not typing —
-    // so it only gates the Secure Input check (and keeps that from false-alarming
-    // on brief password prompts). The "silent death" that originally motivated a
-    // silence-based reinstall traced back to Secure Input, which we now detect
-    // directly; real tap death surfaces via tapIsEnabled and the OS tapDisabled
-    // events instead.
+    // How long the tap must be silent before we look for blocked delivery paths.
+    // Silence is NOT proof of a dead tap — it's identical to the user simply not
+    // typing — so it only gates checks that have an independent signal. Secure
+    // Input is detected directly, and real tap death must surface via tapIsEnabled,
+    // the OS tapDisabled events, or the starved-queue check below.
     private static let staleTapInterval: CFTimeInterval = 90
+
+    // WindowServer-reported queue latency above which an "enabled" tap is
+    // treated as dead. Healthy FILTER taps report µs–ms; WindowServer's own
+    // per-event tap timeout is single-digit seconds, so anything past 5s means
+    // events are rotting in the queue, not being processed slowly.
+    private static let starvedTapLatencyUs: Float = 5_000_000
+
+    // How WindowServer sees our tap. A starved tap — mach port still registered
+    // but its events no longer being serviced — keeps reporting enabled=true,
+    // so tapIsEnabled can't detect it. The queue latency WindowServer tracks
+    // per tap can: it grows in lockstep with wall clock while an event sits
+    // undelivered.
+    private func reportedTapLatencyUs() -> Float? {
+        var count: UInt32 = 0
+        guard CGGetEventTapList(0, nil, &count) == .success, count > 0 else { return nil }
+        var taps = [CGEventTapInformation](repeating: CGEventTapInformation(), count: Int(count))
+        guard CGGetEventTapList(count, &taps, &count) == .success else { return nil }
+        let pid = getpid()
+        return taps.prefix(Int(count))
+            .filter { $0.tappingProcess == pid }
+            .map(\.avgUsecLatency)
+            .max()
+    }
 
     private func checkAndRevive() {
         // Refresh the menu model once per tick regardless of which branch we
@@ -233,6 +255,21 @@ final class PasteHandler: @unchecked Sendable {
         }
         let enabled = CGEvent.tapIsEnabled(tap: tap)
         let silent = CFAbsoluteTimeGetCurrent() - lastEventTime
+
+        // Starved tap: enabled by every local measure, but WindowServer shows
+        // events queued and unserviced. Re-enabling is a no-op for this state;
+        // only a full rebuild recovers. Gate on silence too so one slow event
+        // around a sleep/wake transition doesn't churn a healthy tap. Repeated
+        // rebuilds point to an upstream event-delivery/session problem; the count
+        // in the log line is the diagnostic signal.
+        if enabled && silent > Self.staleTapInterval,
+           let latencyUs = reportedTapLatencyUs(), latencyUs > Self.starvedTapLatencyUs {
+            starvedRebuilds += 1
+            Log.watchdog.error("tap starved — enabled but WindowServer queue latency \(Int(latencyUs / 1_000_000))s; rebuilding (rebuild #\(starvedRebuilds) since last healthy tick)")
+            teardownTap()
+            installTap()
+            return
+        }
 
         // Long silence with the tap still "enabled" has one confirmed cause:
         // Secure Input swallowing key events. Idle looks identical, so we surface
@@ -252,6 +289,7 @@ final class PasteHandler: @unchecked Sendable {
         noteSecureInputCleared()
 
         if enabled {
+            starvedRebuilds = 0
             Log.watchdog.info("tap.enabled=true")
             return
         }

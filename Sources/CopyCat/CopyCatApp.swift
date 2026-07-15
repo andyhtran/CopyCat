@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UserNotifications
 
 @main
 struct CopyCatApp: App {
@@ -36,6 +37,7 @@ struct CopyCatApp: App {
         // can't surface it.
         MenuBarExtra(isInserted: $showMenuBarIcon) {
             CopyCatMenu()
+                .environment(\.updaterController, appDelegate.updaterController)
         } label: {
             Image(nsImage: menuBarIcon)
                 .accessibilityLabel("CopyCat")
@@ -48,6 +50,9 @@ private struct CopyCatMenu: View {
 
     var body: some View {
         StatusHeader()
+        Divider()
+
+        UpdateMenuItems()
         Divider()
 
         Toggle("Local paste (\(HotkeyBinding.localPaste.displayString))", isOn: $store.enableLocalPaste)
@@ -92,6 +97,72 @@ private struct CopyCatMenu: View {
             NSApp.terminate(nil)
         }
         .keyboardShortcut("q")
+    }
+}
+
+private struct UpdateMenuItems: View {
+    @Environment(\.updaterController) private var updaterController
+
+    var body: some View {
+        switch updaterController?.updateViewModel.state ?? .idle {
+        case .idle:
+            Button("Check for Updates", action: checkForUpdates)
+                .disabled(!isUpdaterAvailable)
+            if let reason = updaterController?.unavailableReason {
+                Text(reason)
+            }
+
+        case .checking:
+            Text("Checking for Updates…")
+
+        case .updateAvailable(let update):
+            Button("Install Update \(update.version)") {
+                update.install()
+            }
+            Button("Later") {
+                update.dismiss()
+            }
+
+        case .downloading(let download):
+            Text(downloadTitle(for: download))
+            Button("Cancel Download") {
+                download.cancel()
+            }
+
+        case .extracting:
+            Text("Preparing Update…")
+
+        case .installing:
+            Text("Installing Update…")
+
+        case .notFound:
+            Text("You're up to date")
+            Button("Check Again", action: checkForUpdates)
+                .disabled(!isUpdaterAvailable)
+
+        case .failed:
+            Text("Update Failed")
+            Button("Retry Update Check", action: checkForUpdates)
+                .disabled(!isUpdaterAvailable)
+        }
+    }
+
+    private var isUpdaterAvailable: Bool {
+        updaterController?.isAvailable == true
+    }
+
+    private func checkForUpdates() {
+        guard updaterController?.updateViewModel.state.allowsManualCheck == true else {
+            return
+        }
+        updaterController?.checkForUpdates(nil)
+    }
+
+    private func downloadTitle(for download: UpdateState.Downloading) -> String {
+        if let fraction = download.fraction {
+            return "Downloading Update… \(Int(fraction * 100))%"
+        }
+        return "Downloading Update…"
     }
 }
 
@@ -208,10 +279,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     var pasteHandler: PasteHandler?
     private var settingsWindowController: SettingsWindowController?
+    let updaterController: UpdaterProviding = makeUpdaterController()
 
     func openSettings() {
         if settingsWindowController == nil {
-            settingsWindowController = SettingsWindowController()
+            settingsWindowController = SettingsWindowController(updaterController: updaterController)
         }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindowController?.showWindow(nil)
@@ -220,6 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
         Settings.registerDefaults()
+        UNUserNotificationCenter.current().delegate = self
 
         NSApp.setActivationPolicy(.accessory)
         Log.app.info("CopyCat launching (pid=\(ProcessInfo.processInfo.processIdentifier))")
@@ -248,5 +321,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         openSettings()
         return true
+    }
+}
+
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        let identifier = response.notification.request.identifier
+        guard identifier == UpdateNotification.identifier else { return }
+        // The update session is still pending in the updater's view model;
+        // opening Settings surfaces the Install action even if the menu bar
+        // icon is hidden.
+        await MainActor.run {
+            self.openSettings()
+        }
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        // Without this, notifications are suppressed whenever the app is
+        // active (for example, while Settings is open).
+        [.banner]
     }
 }

@@ -40,6 +40,7 @@ struct SettingsView: View {
 // MARK: - General
 
 private struct GeneralSettingsView: View {
+    @Environment(\.updaterController) private var updaterController
     @ObservedObject private var store = SettingsStore.shared
 
     // Bound directly to the same UserDefaults key as the App scene's
@@ -47,14 +48,39 @@ private struct GeneralSettingsView: View {
     // immediately. Routing through SettingsStore (raw UserDefaults.set) does
     // not reliably notify @AppStorage observers.
     @AppStorage("showMenuBarIcon") private var showMenuBarIcon: Bool = true
+    @State private var autoUpdateEnabled = true
 
     var body: some View {
         Form {
-            Section("Behavior") {
+            Section("App") {
                 Toggle("Launch at login", isOn: $store.launchAtLogin)
                     .onChange(of: store.launchAtLogin) { _, new in
                         LaunchAtLogin.setEnabled(new)
                     }
+                Toggle("Show menu bar icon", isOn: $showMenuBarIcon)
+                Toggle(
+                    "Check for updates automatically",
+                    isOn: Binding(
+                        get: { autoUpdateEnabled },
+                        set: {
+                            autoUpdateEnabled = $0
+                            updaterController?.automaticallyChecksForUpdates = $0
+                        }
+                    )
+                )
+
+                LabeledContent("Check for updates") {
+                    updateCheckContent
+                }
+
+                if let reason = updaterController?.unavailableReason {
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Pasting") {
                 Toggle(
                     "Enable local paste (\(HotkeyBinding.localPaste.displayString))",
                     isOn: $store.enableLocalPaste)
@@ -65,10 +91,6 @@ private struct GeneralSettingsView: View {
                     }
                 }
                 .disabled(!store.enableBroadcast)
-            }
-
-            Section("Appearance") {
-                Toggle("Show menu bar icon", isOn: $showMenuBarIcon)
             }
 
             Section("Cache") {
@@ -85,9 +107,83 @@ private struct GeneralSettingsView: View {
                     Text("Keep most recent: \(store.cacheKeepCount) screenshots")
                 }
             }
+
+            Section("About") {
+                LabeledContent("Version", value: AppVersionInfo.current.displayString)
+            }
         }
         .formStyle(.grouped)
         .padding(.horizontal, 4)
+        .onAppear {
+            autoUpdateEnabled = updaterController?.automaticallyChecksForUpdates ?? true
+        }
+    }
+
+    /// Mirrors the live update state next to the Check Now button, since the
+    /// menu (where the full banner lives) may be closed while the user is in
+    /// this window.
+    @ViewBuilder private var updateCheckContent: some View {
+        switch updaterController?.updateViewModel.state ?? .idle {
+        case .idle:
+            checkNowButton
+
+        case .checking:
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Checking…")
+                    .foregroundStyle(.secondary)
+            }
+
+        case .updateAvailable(let update):
+            Button("Install \(update.version)") {
+                update.install()
+            }
+
+        case .downloading(let download):
+            Text(
+                download.fraction.map { "Downloading… \(Int($0 * 100))%" }
+                    ?? "Downloading…"
+            )
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+
+        case .extracting:
+            Text("Preparing…")
+                .foregroundStyle(.secondary)
+
+        case .installing:
+            Text("Installing… CopyCat will relaunch")
+                .foregroundStyle(.secondary)
+
+        case .notFound:
+            Text("You're up to date")
+                .foregroundStyle(.secondary)
+
+        case .failed:
+            HStack(spacing: 8) {
+                Text("Update failed")
+                    .foregroundStyle(.secondary)
+                checkNowButton
+            }
+        }
+    }
+
+    private var checkNowButton: some View {
+        Button("Check Now") {
+            guard updaterController?.updateViewModel.state.allowsManualCheck == true else {
+                return
+            }
+            updaterController?.checkForUpdates(nil)
+        }
+        .disabled(updateCheckDisabled)
+    }
+
+    private var updateCheckDisabled: Bool {
+        guard let updaterController, updaterController.isAvailable else {
+            return true
+        }
+        return !updaterController.updateViewModel.state.allowsManualCheck
     }
 }
 
