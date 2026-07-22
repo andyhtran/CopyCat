@@ -5,6 +5,16 @@
         <link>https://raw.githubusercontent.com/andyhtran/CopyCat/main/appcast.xml</link>
         <description>CopyCat updates</description>
         <item>
+            <title>1.1.0</title>
+            <pubDate>Wed, 22 Jul 2026 02:26:49 -0400</pubDate>
+            <link>https://raw.githubusercontent.com/andyhtran/CopyCat/main/appcast.xml</link>
+            <sparkle:version>2607220225</sparkle:version>
+            <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/andyhtran/CopyCat/releases/download/v1.1.0/CopyCat-1.1.0.zip" length="1569243" type="application/octet-stream" sparkle:edSignature="OODadQyQRvblbdp1uQ5JOYTtyqzqvORMFh9xRnZ1WM8G+7ISCDUm42Qj91fA8RYAFS0saIiGW70QjuQGX71HDA=="/>
+        </item>
+        <item>
             <title>1.0.0</title>
             <pubDate>Wed, 15 Jul 2026 00:15:36 -0400</pubDate>
             <link>https://raw.githubusercontent.com/andyhtran/CopyCat/main/appcast.xml</link>
