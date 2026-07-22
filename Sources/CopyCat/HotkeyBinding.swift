@@ -31,7 +31,13 @@ struct HotkeyBinding: Equatable, Sendable {
 
     func matches(keyCode: Int64, flags: CGEventFlags) -> Bool {
         guard Int(keyCode) == self.keyCode else { return false }
-        return (flags.rawValue & modifierMask) == modifiers
+        return matchesModifiers(flags)
+    }
+
+    /// Modifier-only match, for callers that already know the key (the IOHID
+    /// sensor reports V by HID usage, not by CGEvent keycode).
+    func matchesModifiers(_ flags: CGEventFlags) -> Bool {
+        (flags.rawValue & modifierMask) == modifiers
     }
 
     var displayString: String {
