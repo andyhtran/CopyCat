@@ -11,12 +11,22 @@ import IOKit
 // explicitly instead of churning the tap.
 enum SecureInput {
     /// Who holds the lock, and whether that process still exists.
-    struct Owner: Equatable {
+    struct Owner: Equatable, Sendable {
         let pid: pid_t
-        /// Localized GUI app name (e.g. "Ghostty"); nil for daemons and for
-        /// owners that have already exited.
+        /// Localized GUI app name (e.g. "Ghostty") or the BSD process name for
+        /// daemons; nil only when the owner has already exited.
         let appName: String?
         let isRunning: Bool
+        /// Bundle identifier when the owner is a GUI app — the stable key the
+        /// triage layer matches against (loginwindow, target terminals).
+        let bundleID: String?
+
+        init(pid: pid_t, appName: String?, isRunning: Bool, bundleID: String? = nil) {
+            self.pid = pid
+            self.appName = appName
+            self.isRunning = isRunning
+            self.bundleID = bundleID
+        }
 
         /// True when the lock points at a PID that no longer exists — the lock
         /// leaked because the owner died without balancing its enable. This is
@@ -54,7 +64,17 @@ enum SecureInput {
         // PID reuse is a tolerated race here: if `pid` was recycled we may label
         // a dead orphan as "running", but the lock itself is what we report on.
         let running = app != nil || processExists(pid)
-        return Owner(pid: pid, appName: app?.localizedName, isRunning: running)
+        let name = app?.localizedName ?? (running ? processName(pid) : nil)
+        return Owner(pid: pid, appName: name, isRunning: running, bundleID: app?.bundleIdentifier)
+    }
+
+    /// BSD process name for non-GUI holders (daemons, helpers) so the alert
+    /// can name the culprit instead of showing a bare pid.
+    private static func processName(_ pid: pid_t) -> String? {
+        var buffer = [CChar](repeating: 0, count: 128)
+        let length = proc_name(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return nil }
+        return String(cString: buffer)
     }
 
     /// PID recorded as the Secure Input owner, or nil when the key is absent.

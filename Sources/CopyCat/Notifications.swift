@@ -23,11 +23,13 @@ enum Notifier {
         }
     }
 
-    static func secureInputBlocked(_ owner: SecureInput.Owner?) {
+    static func secureInputBlocked(_ presentation: SecureInputPresentation) {
         guard available else { return }
         let content = UNMutableNotificationContent()
-        content.title = "CopyCat — paste blocked"
-        content.body = blockedBody(owner)
+        content.title = presentation.title
+        // Advice only — banners get ~4 visible lines and the title already
+        // names the culprit; the full cause stays in the menu and log.
+        content.body = presentation.advice
         content.sound = .default
 
         let request = UNNotificationRequest(identifier: secureInputID, content: content, trigger: nil)
@@ -37,16 +39,5 @@ enum Notifier {
     static func secureInputCleared() {
         guard available else { return }
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [secureInputID])
-    }
-
-    private static func blockedBody(_ owner: SecureInput.Owner?) -> String {
-        let restore = HotkeyBinding.localPaste.displayString
-        if let owner, owner.isOrphaned {
-            return "An orphaned Secure Input lock (owner pid \(owner.pid) has exited) is suppressing \(restore) for every app. Log out and back in to clear it."
-        }
-        if let owner {
-            return "\(owner.description) is holding Secure Input, which suppresses \(restore) for every app. Quit or refocus it, or finish its password prompt."
-        }
-        return "Secure Input is suppressing \(restore) for every app. Log out and back in if it persists."
     }
 }

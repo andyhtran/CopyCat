@@ -12,8 +12,12 @@ final class StatusModel: ObservableObject {
     static let shared = StatusModel()
 
     @Published var tapEnabled = false
-    /// Label of whoever holds session-wide Secure Input; nil when clear.
-    @Published var secureInputBlocker: String?
+    /// Current Secure Input state for the menu; nil when clear. Includes
+    /// benign holds (expected kind) so the menu can explain them quietly.
+    @Published var secureInput: SecureInputPresentation?
+    /// True only for alert-worthy blocks — drives the menu-bar icon badge and
+    /// the orange menu treatment.
+    @Published var secureInputAlerting = false
 
     // "CopyCat" for the release build, "CopyCat Dev" for the dev build. Read
     // from CFBundleDisplayName (set per-config in build-app.sh) so the two

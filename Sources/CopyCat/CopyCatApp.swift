@@ -12,10 +12,27 @@ struct CopyCatApp: App {
     // synchronously — that combination produces a tight transaction loop.
     @AppStorage("showMenuBarIcon") private var showMenuBarIcon: Bool = true
 
-    // Resolve once at startup. SwiftUI's MenuBarExtra(_:image:) form expects
-    // an asset-catalog name, which we don't have — feeding NSImage directly
-    // through the custom-label form sidesteps that lookup.
-    private let menuBarIcon: NSImage = {
+    var body: some Scene {
+        // Settings is hosted in an AppDelegate-owned NSWindowController, not
+        // a SwiftUI Settings scene. showSettingsWindow: dispatch is unreliable
+        // for LSUIElement apps — when the menu bar icon is hidden there's no
+        // key window in the responder chain, so applicationShouldHandleReopen
+        // can't surface it.
+        MenuBarExtra(isInserted: $showMenuBarIcon) {
+            CopyCatMenu()
+                .environment(\.updaterController, appDelegate.updaterController)
+        } label: {
+            MenuBarLabel()
+        }
+    }
+}
+
+// Resolved once. SwiftUI's MenuBarExtra(_:image:) form expects an
+// asset-catalog name, which we don't have — feeding NSImage directly through
+// the custom-label form sidesteps that lookup.
+@MainActor
+private enum MenuBarIconFactory {
+    static let normal: NSImage = {
         if let url = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "pdf"),
            let image = NSImage(contentsOf: url) {
             image.size = NSSize(width: 18, height: 18)
@@ -29,19 +46,38 @@ struct CopyCatApp: App {
         return fallback
     }()
 
-    var body: some Scene {
-        // Settings is hosted in an AppDelegate-owned NSWindowController, not
-        // a SwiftUI Settings scene. showSettingsWindow: dispatch is unreliable
-        // for LSUIElement apps — when the menu bar icon is hidden there's no
-        // key window in the responder chain, so applicationShouldHandleReopen
-        // can't surface it.
-        MenuBarExtra(isInserted: $showMenuBarIcon) {
-            CopyCatMenu()
-                .environment(\.updaterController, appDelegate.updaterController)
-        } label: {
-            Image(nsImage: menuBarIcon)
-                .accessibilityLabel("CopyCat")
+    // Same paw with an exclamation badge in the corner: the persistent,
+    // glanceable "paste is broken" signal while Secure Input blocks the tap.
+    static let blocked: NSImage = {
+        let base = normal
+        let size = base.size == .zero ? NSSize(width: 18, height: 18) : base.size
+        let image = NSImage(size: size, flipped: false) { rect in
+            base.draw(in: rect)
+            let badge = NSRect(x: rect.maxX - 9, y: rect.minY, width: 9, height: 9)
+            // Punch a ring around the badge so it reads against the base
+            // glyph at menu-bar size (template images are alpha-only).
+            NSGraphicsContext.current?.compositingOperation = .destinationOut
+            NSColor.black.setFill()
+            NSBezierPath(ovalIn: badge.insetBy(dx: -1.5, dy: -1.5)).fill()
+            NSGraphicsContext.current?.compositingOperation = .sourceOver
+            if let symbol = NSImage(systemSymbolName: "exclamationmark.circle.fill", accessibilityDescription: nil) {
+                symbol.draw(in: badge)
+            } else {
+                NSBezierPath(ovalIn: badge).fill()
+            }
+            return true
         }
+        image.isTemplate = true
+        return image
+    }()
+}
+
+private struct MenuBarLabel: View {
+    @ObservedObject private var status = StatusModel.shared
+
+    var body: some View {
+        Image(nsImage: status.secureInputAlerting ? MenuBarIconFactory.blocked : MenuBarIconFactory.normal)
+            .accessibilityLabel(status.secureInputAlerting ? "CopyCat — paste blocked" : "CopyCat")
     }
 }
 
@@ -80,6 +116,14 @@ private struct CopyCatMenu: View {
             Button("Open Accessibility settings") {
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
                     NSWorkspace.shared.open(url)
+                }
+            }
+            // The paste-attempt sensor (toast at the exact moment ⌘V is
+            // pressed while blocked) needs Input Monitoring; hide the item
+            // once granted since the sensor then arms automatically.
+            if !SecureInputWatcher.shared.sensorAccessGranted {
+                Button("Enable paste-attempt alerts…") {
+                    SecureInputWatcher.shared.requestSensorAccess()
                 }
             }
         }
@@ -178,10 +222,23 @@ private struct StatusHeader: View {
 
         // Secure Input silently blocks the tap for the whole session, so a
         // green "Tap on" alone would be misleading — call out the culprit.
-        if let blocker = status.secureInputBlocker {
-            Text("⚠ Blocked by Secure Input (\(blocker))")
-                .font(.caption)
-                .foregroundStyle(.orange)
+        // Alert-worthy blocks get the orange treatment plus a one-click fix;
+        // benign holds (focused password prompt) get a quiet gray note.
+        if let secureInput = status.secureInput {
+            if status.secureInputAlerting {
+                Text(secureInput.menuLabel)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                if let action = secureInput.action {
+                    Button(action.label) {
+                        SecureInputActions.perform(action)
+                    }
+                }
+            } else {
+                Text(secureInput.menuLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
 
         if store.enableBroadcast {
@@ -308,10 +365,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         pasteHandler = PasteHandler()
         pasteHandler?.start()
+
+        SecureInputWatcher.shared.tapEnabledProvider = { [weak self] in
+            self?.pasteHandler?.isTapEnabled ?? false
+        }
+        SecureInputWatcher.shared.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         Log.app.info("CopyCat terminating")
+        SecureInputWatcher.shared.stop()
         pasteHandler?.stop()
     }
 
