@@ -368,9 +368,10 @@ private struct HostsSettingsView: View {
 
     private func refreshPeers() {
         // tailscale status --json takes ~300-500ms; keep it off the main thread
-        // so opening the Settings window doesn't stall.
+        // so opening the Settings window doesn't stall. Uncached on purpose:
+        // this backs an explicit "Refresh peers" action.
         Task.detached(priority: .userInitiated) {
-            let fresh = TailscaleDiscovery.allPeers()
+            let fresh = TailscaleDiscovery.refreshPeers()
             await MainActor.run { peers = fresh }
         }
     }
