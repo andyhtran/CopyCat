@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/macOS-14.0%2B-blue" alt="macOS 14.0+">
   <img src="https://img.shields.io/badge/Swift-6.0%2B-orange" alt="Swift 6.0+">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License MIT">
-  <img src="https://img.shields.io/badge/release-v1.1.0-blue" alt="GitHub release">
+  <img src="https://img.shields.io/badge/release-v1.1.1-blue" alt="GitHub release">
   <img src="https://img.shields.io/badge/Compatible-Claudex-8A5CF6?style=flat-square" alt="Claudex">
 </p>
 
