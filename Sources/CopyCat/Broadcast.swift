@@ -41,6 +41,21 @@ enum Broadcast {
         let outPath = compressIfNeeded(src: pngPath, stamp: stamp, dir: cacheDir, log: Log.cmdOptV)
         let outName = outPath.lastPathComponent
 
+        // Type the moment the local file exists — before peer discovery. The
+        // typed string doesn't depend on which hosts are reachable, and the
+        // discovery call can hang for tens of seconds when tailscaled is
+        // starved (UDP-blocked networks); the user's paste must never wait on
+        // the network. Typing already races the uploads on the remote side,
+        // so this ordering widens no window that wasn't open before.
+        //
+        // Remote home dir is unknown, so always tilde-prefix. Trailing space
+        // matches the local-paste path so the user can keep typing.
+        let typed = "~/\(remoteCacheRel)/\(outName) "
+        DispatchQueue.main.async {
+            Typer.type(typed)
+        }
+        Log.cmdOptV.info("typed \(typed)")
+
         let sizeBytes = (try? FileManager.default.attributesOfItem(atPath: outPath.path)[.size] as? Int) ?? 0
         let sizeKB = sizeBytes / 1024
 
@@ -62,14 +77,6 @@ enum Broadcast {
                 keepCount: Settings.cacheKeepCount
             )
         }
-
-        // Remote home dir is unknown, so always tilde-prefix. Trailing space
-        // matches the local-paste path so the user can keep typing.
-        let typed = "~/\(remoteCacheRel)/\(outName) "
-        DispatchQueue.main.async {
-            Typer.type(typed)
-        }
-        Log.cmdOptV.info("typed \(typed)")
 
         BroadcastStatus.shared.recordRun(hosts: hosts)
 
@@ -190,14 +197,49 @@ struct ShellResult: Sendable {
     let stdout: String
     let stderr: String
     let exitCode: Int32
+    /// True when the watchdog killed the process for exceeding `timeout`.
+    /// `exitCode` is the signal number in that case, so `isSuccess` is
+    /// already false — this flag exists so callers can report "timed out"
+    /// instead of a misleading "exited non-zero".
+    let timedOut: Bool
 
     var isSuccess: Bool { exitCode == 0 }
+}
+
+// Process isn't Sendable, but the watchdog only calls terminate(), which is
+// safe from another thread: it forwards SIGTERM and is a no-op once the
+// process has exited.
+private final class ProcessTerminator: @unchecked Sendable {
+    private let process: Process
+    private let lock = NSLock()
+    private var fired = false
+
+    init(_ process: Process) { self.process = process }
+
+    func terminate() {
+        lock.lock()
+        fired = true
+        lock.unlock()
+        process.terminate()
+    }
+
+    var didFire: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return fired
+    }
 }
 
 /// Runs a process with stdin detached, capturing stdout and stderr separately
 /// so callers can distinguish "no output" from "failed silently". Returns
 /// `nil` only when the process couldn't be spawned at all (bad path, etc).
-func runShell(_ exec: String, args: [String], env: [String: String]? = nil) -> ShellResult? {
+///
+/// `timeout` bounds the total run: past it the process gets SIGTERM, the
+/// pipe reads unblock on EOF, and the result comes back with `timedOut` set.
+/// Without it a hung child blocks the calling thread indefinitely.
+func runShell(
+    _ exec: String, args: [String], env: [String: String]? = nil, timeout: TimeInterval? = nil
+) -> ShellResult? {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: exec)
     p.arguments = args
@@ -209,15 +251,33 @@ func runShell(_ exec: String, args: [String], env: [String: String]? = nil) -> S
     p.standardInput = FileHandle(forReadingAtPath: "/dev/null")
     do {
         try p.run()
-        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        return ShellResult(
-            stdout: String(data: outData, encoding: .utf8) ?? "",
-            stderr: String(data: errData, encoding: .utf8) ?? "",
-            exitCode: p.terminationStatus
-        )
     } catch {
         return nil
     }
+
+    var watchdog: DispatchWorkItem?
+    var terminator: ProcessTerminator?
+    if let timeout {
+        let t = ProcessTerminator(p)
+        let item = DispatchWorkItem { t.terminate() }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: item)
+        terminator = t
+        watchdog = item
+    }
+
+    let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+    let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    watchdog?.cancel()
+
+    // didFire alone can mislabel a natural exit: the watchdog may fire in the
+    // gap between exit and cancel. Requiring uncaughtSignal confirms the kill
+    // actually took the process down.
+    let timedOut = (terminator?.didFire ?? false) && p.terminationReason == .uncaughtSignal
+    return ShellResult(
+        stdout: String(data: outData, encoding: .utf8) ?? "",
+        stderr: String(data: errData, encoding: .utf8) ?? "",
+        exitCode: p.terminationStatus,
+        timedOut: timedOut
+    )
 }
